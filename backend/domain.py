@@ -1,14 +1,23 @@
+import binascii
 import datetime
 import json
 from hashlib import sha256
 from typing import Union
+from urllib.parse import urlparse
+
+import Crypto
+import requests
+from Crypto.Hash import SHA
+from Crypto.PublicKey import RSA
+from Crypto.Signature import PKCS1_v1_5
+
 
 class Transaction:
-    def __init__(self, sender, recipient, value):
+    def __init__(self, sender, recipient, value, signature=None):
         self.sender = sender
         self.recipient = recipient
         self.value = value
-        self.signature = None
+        self.signature = signature
 
     def to_dict(self):
         return {
@@ -56,13 +65,13 @@ class Wallet:
 
 
 class Block:
-    def __init__(self, index, transactions, timestamp, previous_hash, nonce=None):
+    def __init__(self, index, transactions, timestamp, previous_hash, hash=None, nonce=None):
         self.index = index
         self.transactions = transactions
         self.timestamp = timestamp
         self.previous_hash = previous_hash
         self.nonce = nonce
-        self.hash = None
+        self.hash = hash
 
     def to_dict(self):
         return {
@@ -82,6 +91,7 @@ class Block:
 
 class Blockchain:
     difficulty = 2
+    nodes = set()
 
     def __init__(self):
         self.unconfirmed_transactions = []
@@ -152,3 +162,69 @@ class Blockchain:
             block.nonce += 1
             computed_hash = block.compute_hash()
         return computed_hash
+
+    def register_node(self, node_url):
+        # Checking node_url has valid format
+        parsed_url = urlparse(node_url)
+        if parsed_url.netloc:
+            self.nodes.add(parsed_url.netloc)
+        elif parsed_url.path:
+            # Accepts an URL without scheme like '192.168.0.5:5000'.
+            self.nodes.add(parsed_url.path)
+        else:
+            raise ValueError('Invalid URL')
+
+    def consensus(self):
+        neighbours = self.nodes
+
+        new_chain = None
+        # We're only looking for chains longer than ours
+        max_length = len(self.chain)
+        # Grab and verify the chains from all the nodes in our network
+        for node in neighbours:
+            response = requests.get('http://' + node + '/fullchain')
+            if response.status_code == 200:
+                length = response.json()['length']
+                chain = response.json()['chain']
+                # Check if the length is longer and the chain is valid
+                if length > max_length and self.valid_chain(chain):
+                    max_length = length
+                    new_chain = chain
+        # Replace our chain if longer chain is found
+        if new_chain:
+            self.chain = json.loads(new_chain)
+            return True
+        return False
+
+    def valid_chain(self, chain):
+        # check if a blockchain is valid
+        current_index = 0
+        chain = json.loads(chain)
+        while current_index < len(chain):
+            block = json.loads(chain[current_index])
+            current_block = Block(block['index'],
+                                  block['transactions'],
+                                  block['timestamp'],
+                                  block['previous_hash'],
+                                  block['hash'],
+                                  block['nonce'])
+            if current_index + 1 < len(chain):
+                if current_block.compute_hash() != json.loads(chain[current_index + 1])['previous_hash']:
+                    return False
+            if isinstance(current_block.transactions, list):
+                for transaction in current_block.transactions:
+                    transaction = json.loads(transaction)
+                    # skip Block reward because it does not have signature
+                    if transaction['sender'] == 'Block_Reward':
+                        continue
+                    current_transaction = Transaction(transaction['sender'],
+                                                      transaction['recipient'],
+                                                      transaction['value'],
+                                                      transaction['signature'])
+                    # validate digital signature of each transaction
+                    if not current_transaction.verify_transaction_signature():
+                        return False
+                    if not self.is_valid_proof(current_block, block['hash']):
+                        return False
+            current_index += 1
+        return True
