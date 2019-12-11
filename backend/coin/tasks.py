@@ -14,6 +14,11 @@ def consensus_requests(*args, **kwargs):
         requests.get(peer + '/node/consensus/')
 
 
+def mine_and_consensus(peer: str):
+    r = requests.get(peer + '/miner/mine/')
+    print(r.status_code)
+
+
 def mine():
     r: Redis = app.redis
     if not r.getset('is_mining', True):

@@ -22,7 +22,7 @@ def random_id() -> str:
     return uuid.uuid4().hex
 
 
-def sign_hash(secret, hash_: SHA256) -> str:
+def sign_hash(secret: RSA.RsaKey, hash_: SHA256) -> str:
     signer = PKCS1_v1_5.new(secret)
     return binascii.hexlify(signer.sign(hash_)).decode('utf8')
 

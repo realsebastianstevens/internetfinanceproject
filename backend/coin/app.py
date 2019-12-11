@@ -6,9 +6,10 @@ from flask import Flask, jsonify, request
 from coin import tasks
 from coin.blockchain import Blockchain
 from coin.config import Config
-from coin.domain import Transaction, Wallet
+from coin.domain import Wallet
 from coin.miner import Miner
 from coin.node import Node
+from coin.transactionbuilder import NewTransactionViewModel
 from worker import conn
 
 app = Flask(__name__)
@@ -21,11 +22,15 @@ app.task_queue = rq.Queue(connection=app.redis)
 def new_transaction():
     values = request.json
     required = ['transaction']
-    if not all(k in values for k in required):
-        return 'Missing values', 400
-    transaction_result = blockchain.add_new_transaction(Transaction.from_json(values['transaction']))
-    if transaction_result:
-        miner.mine(myWallet.identity, myWallet.identity)
+    if values is None or not all(k in values for k in required):
+        return f'One or more missing values: {required}', 400
+    try:
+        tx = NewTransactionViewModel.from_json_request(values['transaction']).build()
+    except Exception as e:
+        return str(e), 400
+    is_added = blockchain.add_new_transaction(tx)
+    if is_added:
+        tasks.launch_task(tasks.mine_and_consensus, 'mine blockchain', peer=f'http://{Config.SERVER_HOST}:{port}')
         response = {'message': 'Transaction will be added to Block '}
         return jsonify(response), 201
     else:
@@ -112,12 +117,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--port', type=int, help='Port number e.g. 3000')
     parser.add_argument('--peers', type=str, nargs='*', help='Peers e.g http://localhost:5000/')
+    parser.add_argument('--use_test_miner', action='store_true')
     args = parser.parse_args()
 
     port = str(args.port)
     peers = set(args.peers) if args.peers else set()
+    use_test_miner = args.use_test_miner
 
-    myWallet = Wallet.generate()
+    myWallet = Wallet.from_json(Config.TEST_WALLET_1) if use_test_miner else Wallet.generate()
     print(myWallet.identity)
     print(myWallet.identity_private)
     blockchain = Blockchain()

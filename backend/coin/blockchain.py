@@ -2,7 +2,6 @@ import datetime
 from functools import reduce
 from typing import Union, List
 
-from coin import tasks
 from coin.config import Config
 from coin.database import Database
 from coin.domain import Transaction, Block, InputInfo
@@ -71,7 +70,6 @@ class Blockchain:
     def add_new_transaction(self, transaction: Transaction) -> bool:
         if transaction.check():
             self.database.add_unconfirmed_transaction(transaction)
-            tasks.launch_task('mine', 'mine blockchain')
             return True
         return False
 
@@ -88,7 +86,7 @@ class Blockchain:
         if previous_hash and previous_hash != block.previous_hash:
             print("Hashes don't match")
             return False
-        if not Blockchain.is_valid_proof(block, proof):
+        if not self.is_valid_proof(block, proof):
             print("Proof is not valid")
             return False
         # check transactions
@@ -111,9 +109,8 @@ class Blockchain:
     def datetime_now() -> str:
         return datetime.datetime.now().strftime("%m/%d/%Y, %H:%M:%S")
 
-    @staticmethod
-    def is_valid_proof(block: Block, block_hash: str) -> bool:
-        return block_hash.startswith('0' * Blockchain.difficulty) and block_hash == block.compute_hash()
+    def is_valid_proof(self, block: Block, block_hash: str) -> bool:
+        return block_hash.startswith('0' * self.difficulty) and block_hash == block.compute_hash()
 
     def replace_chain(self, new_chain):
         self.chain = new_chain
@@ -161,6 +158,14 @@ class Blockchain:
         # verify if the transaction isn't already in the blockchain
         if any([tx.hash == x.hash or tx.id == x.id for x in self.confirmed_transactions]):
             raise Exception(f"Transaction '{tx.hash}'already in the blockchain")
+
+        # verify all inputs exists in database
+        for input_ in tx.inputs:
+            if not any([x.hash == input_.tx_hash and input_.index in range(len(x.outputs)) and x.outputs[
+                input_.index].amount == input_.amount for x in
+                        self.confirmed_transactions]):
+                print("Input references transaction that is not in database")
+                return False
 
         # verify all inputs are unspent
         for input_ in tx.inputs:

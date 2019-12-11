@@ -2,7 +2,7 @@ import datetime
 from functools import reduce, partial
 from typing import List, Union
 
-from coin import tasks, util
+from coin import util
 from coin.blockchain import Blockchain
 from coin.config import Config
 from coin.domain import Transaction, InputInfo, Block
@@ -25,22 +25,18 @@ class Miner:
     def __init__(self, blockchain: Blockchain):
         self.blockchain = blockchain
 
-    @staticmethod
-    def proof_of_work(block: Block):
+    def proof_of_work(self, block: Block):
         block.nonce = 0
         computed_hash = block.compute_hash()
-        while not computed_hash.startswith('0' * Blockchain.difficulty):
+        while not computed_hash.startswith('0' * self.blockchain.difficulty):
             block.nonce += 1
             computed_hash = block.compute_hash()
         return computed_hash
 
-    def mine_task(self, reward_address, fee_address):
-        tasks.launch_task(self.mine, 'mine added transaction', reward_address=reward_address, fee_address=fee_address)
-
     def mine(self, reward_address, fee_address) -> Union[Block, None]:
         new_block = self.generate_block(reward_address, fee_address)
         if new_block:
-            proof = Miner.proof_of_work(new_block)
+            proof = self.proof_of_work(new_block)
             return self.blockchain.add_block(new_block, proof)
         else:
             print("No block generated")
@@ -61,7 +57,7 @@ class Miner:
             def reducer(x: List[InputInfo], y: List[InputInfo]) -> List[InputInfo]:
                 return x + y
 
-            return reduce(reducer, map(mapper, transactions))
+            return reduce(reducer, map(mapper, transactions), [])
 
         def input_equals(a: InputInfo, b: InputInfo):
             return a.tx_hash == b.tx_hash and a.index == b.index
@@ -74,18 +70,20 @@ class Miner:
             # Check if transaction is attempting to reuse inputs (double spending)
             is_already_spent = partial(find_input_in_transaction_list, selected)
             if any([is_already_spent(x) for x in transaction.inputs]):
+                print("Transactions has some inputs already spent")
                 return False
 
             # Check if transaction already mined
             is_in_blockchain = partial(find_input_in_transaction_list, self.blockchain.confirmed_transactions)
             if any([is_in_blockchain(x) for x in transaction.inputs]):
+                print("Transactions has some inputs already in blockchain")
                 return False
 
         # ==================================================
 
         for tx in candidate_transactions:
             all_positive_utxos = all([output.amount >= 0 for output in tx.outputs])
-            if transaction_input_found_anywhere(tx):
+            if not transaction_input_found_anywhere(tx):
                 if tx.type == Transaction.REGULAR and all_positive_utxos:
                     selected.append(tx)
                 # if negative output found
@@ -95,7 +93,7 @@ class Miner:
                     rejected.append(tx)
             else:
                 rejected.append(tx)
-
+        print(f"Rejected: {len(rejected)} txs {[x.id for x in rejected]}")
         transactions_to_mine = selected[:Config.TRANSACTIONS_PER_BLOCK]
         # Add fee transaction (1 satoshi per transaction)
         if len(transactions_to_mine) > 0:

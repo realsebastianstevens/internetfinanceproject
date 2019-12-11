@@ -4,6 +4,7 @@ from typing import List
 from typing import TypeVar, Type, Optional
 
 import Crypto
+from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 
 from coin import util
@@ -31,11 +32,24 @@ class InputInfo:
             'index': self.index,
             'transaction': self.tx_hash,
             'address': self.address,
-            'amount': self.amount
+            'amount': self.amount,
+            'signature': self.signature
         })
 
+    def _to_json_no_signature(self):
+        val = self.to_json()
+        val.pop('signature')
+        return val
+
     def check(self) -> bool:
-        return util.verify(self.address, self.to_json(), self.signature)
+        return util.verify_hash(self.address, self.compute_hash(), self.signature)
+
+    def compute_hash(self) -> SHA256.SHA256Hash:
+        return util.crypto_hash(self._to_json_no_signature())
+
+    def sign(self, private_key: str) -> str:
+        private_key = util.import_rsa_key(private_key)
+        return util.sign_hash(private_key, self.compute_hash())
 
 
 class OutputInfo:
@@ -58,33 +72,6 @@ class Transaction:
     REGULAR = 'regular'
     REWARD = 'reward'
     FEE = 'fee'
-    """
-    Transaction structure:
-    { 
-        "id": "84286bba8d...7477efdae1", // random id (64 bytes)
-        "hash": "f697d4ae63...c1e85f0ac3", // hash taken from the contents of the transaction: sha256 (id + data) (64 bytes)
-        "type": "regular", // transaction type (regular, fee, reward)
-        "inputs": [
-            {
-                "transaction": "9e765ad30c...e908b32f0c", // transaction hash taken from a previous unspent transaction output (64 bytes)
-                "index": "0", // index of the transaction taken from a previous unspent transaction output
-                "amount": 5000000000, // amount of satoshis
-                "address": "dda3ce5aa5...b409bf3fdc", // from address (64 bytes)
-                "signature": "27d911cac0...6486adbf05" // transaction input hash: sha256 (transaction + index + amount + address) signed with owner address's secret key (128 bytes)
-            }
-        ],
-        "outputs": [
-            {
-                "amount": 10000, // amount of satoshis
-                "address": "4f8293356d...b53e8c5b25" // to address (64 bytes)
-            },
-            {
-                "amount": 4999989999, // amount of satoshis
-                "address": "dda3ce5aa5...b409bf3fdc" // change address (64 bytes)
-            }
-        ]
-    }
-    """
 
     def __init__(self, id_, type_=None, hash_=None, inputs: List[InputInfo] = None,
                  outputs: List[OutputInfo] = None):
@@ -94,22 +81,16 @@ class Transaction:
         self.id = id_
         self.hash = hash_
 
-    def to_dict(self):
-        return {
-            'inputs': [x.to_json() for x in self.inputs],
-            'outputs': [x.to_json() for x in self.outputs],
-        }
-
     def to_json(self) -> dict:
-        return {
+        return OrderedDict({
             'id': self.id,
             'type': self.type,
             'inputs': [x.to_json() for x in self.inputs],
             'outputs': [x.to_json() for x in self.outputs],
             'hash': self.hash,
-        }
+        })
 
-    def to_json_no_hash(self) -> dict:
+    def _to_json_no_hash(self) -> dict:
         val = self.to_json()
         val.pop('hash')
         return val
@@ -153,7 +134,7 @@ class Transaction:
         return True
 
     def compute_hash(self) -> str:
-        return util.crypto_hash(self.to_json_no_hash()).hexdigest()
+        return util.crypto_hash(self._to_json_no_hash()).hexdigest()
 
 
 class Wallet:
@@ -198,7 +179,7 @@ class Wallet:
         for input_ in transaction.inputs:
             h = util.hash_str(input_.tx_hash + str(input_.index) + str(input_.amount) + input_.address)
             input_.signature = util.sign_hash(signer, h)
-        transaction.hash = util.crypto_hash(transaction.to_json_no_hash()).hexdigest()
+        transaction.hash = transaction.compute_hash()
         return transaction
 
 
